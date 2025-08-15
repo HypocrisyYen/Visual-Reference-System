@@ -1,0 +1,361 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>視覺參照理解系統</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .scene-container {
+            display: flex;
+            gap: 20px;
+        }
+        .main-scene {
+            flex: 1;
+        }
+        .segments-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            flex: 1;
+        }
+        .segment {
+            border: 1px solid #ddd;
+            text-align: center;
+            padding: 5px;
+        }
+        .segment img {
+            max-width: 100%;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.recording {
+            background-color: #f44336;
+        }
+        .message-container {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .input-container {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .reference-highlight {
+            border: 3px solid #ff0000;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+        }
+        .recording-indicator {
+            display: none;
+            color: #f44336;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>視覺參照理解系統</h1>
+        
+        <div class="controls">
+            <button id="startBtn">開始</button>
+            <button id="stopBtn" disabled>停止</button>
+            <span id="recordingIndicator" class="recording-indicator">錄製中...</span>
+        </div>
+        
+        <div class="scene-container">
+            <div class="main-scene">
+                <h3>當前場景</h3>
+                <img id="sceneImage" src="/api/video_stream" alt="即時視頻串流" style="max-width: 100%;">
+            </div>
+            
+            <div class="segments-grid" id="segmentsGrid">
+                <!-- 段將在這裡動態生成 -->
+            </div>
+        </div>
+        
+        <div class="input-container">
+            <input type="text" id="textInput" placeholder="輸入文本...">
+            <button id="sendTextBtn">發送</button>
+        </div>
+        
+        <div class="loading" id="loadingIndicator">
+            <p>處理中...</p>
+        </div>
+        
+        <div class="message-container">
+            <h3>對話</h3>
+            <div id="conversation">
+                <p><em>系統就緒，點擊「開始」按鈕開始錄製。</em></p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // DOM元素
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const sendTextBtn = document.getElementById('sendTextBtn');
+        const textInput = document.getElementById('textInput');
+        const sceneImage = document.getElementById('sceneImage');
+        const segmentsGrid = document.getElementById('segmentsGrid');
+        const conversation = document.getElementById('conversation');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        
+        // 全局變量
+        let isRecording = false;
+        let recordingInterval = null;
+        
+        // 事件監聽器
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+        sendTextBtn.addEventListener('click', sendText);
+        textInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendText();
+            }
+        });
+        
+        // 開始錄製
+        function startRecording() {
+            isRecording = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            recordingIndicator.style.display = 'inline';
+            addMessage('系統', '開始錄製...', 'info');
+            
+            // 初始化錄製會話
+            fetch('/api/start_recording', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    stopRecording();
+                    addMessage('系統', data.error, 'error');
+                    return;
+                }
+                
+                // 設置自動截圖和語音處理的間隔
+                recordingInterval = setInterval(captureAndProcess, 1000);
+            })
+            .catch(error => {
+                stopRecording();
+                addMessage('系統', '開始錄製時發生錯誤: ' + error, 'error');
+            });
+        }
+        
+        // 停止錄製
+        function stopRecording() {
+            isRecording = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            recordingIndicator.style.display = 'none';
+            
+            // 清除記錄間隔
+            if (recordingInterval) {
+                clearInterval(recordingInterval);
+                recordingInterval = null;
+            }
+            
+            // 通知服務器停止錄製並生成最終分析
+            showLoading();
+            
+            fetch('/api/stop_recording', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                hideLoading();
+                
+                if (data.error) {
+                    addMessage('系統', data.error, 'error');
+                    return;
+                }
+                
+                // 顯示最終分析結果
+                addMessage('系統', data.summary, 'system');
+            })
+            .catch(error => {
+                hideLoading();
+                addMessage('系統', '停止錄製時發生錯誤: ' + error, 'error');
+            });
+        }
+        
+        // 捕獲並處理
+        function captureAndProcess() {
+            if (!isRecording) return;
+            
+            fetch('/api/capture_and_process', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    addMessage('系統', data.error, 'error');
+                    return;
+                }
+                
+                // 場景圖像現在使用即時串流，不需要更新
+                
+                // 更新分段
+                if (data.segments) {
+                    segmentsGrid.innerHTML = '';
+                    data.segments.forEach(segment => {
+                        const segmentDiv = document.createElement('div');
+                        segmentDiv.className = 'segment';
+                        segmentDiv.innerHTML = `
+                            <img src="data:image/jpeg;base64,${segment.image}" alt="段 ${segment.id}">
+                            <p>位置(${segment.position[0]},${segment.position[1]})</p>
+                        `;
+                        segmentsGrid.appendChild(segmentDiv);
+                    });
+                }
+                
+                // 如果有語音轉寫，顯示
+                if (data.transcription) {
+                    addMessage('你', data.transcription, 'user');
+                }
+                
+                // 如果有臨時回應，顯示
+                if (data.tempResponse) {
+                    addMessage('系統', data.tempResponse, 'system');
+                }
+                
+                // 如果有參照區域，突出顯示
+                if (data.referenced_segment) {
+                    highlightSegment(data.referenced_segment.position);
+                }
+            })
+            .catch(error => {
+                console.error('捕獲和處理時發生錯誤:', error);
+            });
+        }
+        
+        // 發送文本
+        function sendText() {
+            const text = textInput.value.trim();
+            
+            if (!text) {
+                return;
+            }
+            
+            showLoading();
+            
+            fetch('/api/process_text', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ text: text })
+            })
+            .then(response => response.json())
+            .then(data => {
+                hideLoading();
+                
+                if (data.error) {
+                    addMessage('系統', data.error, 'error');
+                    return;
+                }
+                
+                // 顯示輸入和回應
+                addMessage('你', data.text, 'user');
+                addMessage('系統', data.response, 'system');
+                
+                // 如果存在參照區域，突出顯示它
+                if (data.referenced_segment) {
+                    highlightSegment(data.referenced_segment.position);
+                }
+                
+                // 清除輸入
+                textInput.value = '';
+            })
+            .catch(error => {
+                hideLoading();
+                addMessage('系統', '處理文本時發生錯誤: ' + error, 'error');
+            });
+        }
+        
+        // 突出顯示段
+        function highlightSegment(position) {
+            // 移除之前的所有突出顯示
+            document.querySelectorAll('.segment').forEach(segment => {
+                segment.classList.remove('reference-highlight');
+            });
+            
+            // 找到並突出顯示匹配的段
+            const segments = document.querySelectorAll('.segment');
+            segments.forEach((segment, index) => {
+                const posText = segment.querySelector('p').textContent;
+                if (posText.includes(`位置(${position[0]},${position[1]})`)) {
+                    segment.classList.add('reference-highlight');
+                }
+            });
+        }
+        
+        // 添加消息到對話
+        function addMessage(sender, message, type) {
+            const messageElement = document.createElement('p');
+            messageElement.innerHTML = `<strong>${sender}:</strong> ${message}`;
+            
+            if (type === 'error') {
+                messageElement.style.color = 'red';
+            } else if (type === 'info') {
+                messageElement.style.color = 'blue';
+            }
+            
+            conversation.appendChild(messageElement);
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+        
+        // 顯示加載指示器
+        function showLoading() {
+            loadingIndicator.style.display = 'block';
+        }
+        
+        // 隱藏加載指示器
+        function hideLoading() {
+            loadingIndicator.style.display = 'none';
+        }
+    </script>
+</body>
+</html>

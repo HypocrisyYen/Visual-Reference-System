@@ -1,0 +1,10 @@
+torch
+torchvision
+transformers
+openai
+opencv-python
+numpy
+flask
+sounddevice
+webrtcvad
+PyQt6
